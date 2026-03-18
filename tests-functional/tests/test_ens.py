@@ -86,6 +86,7 @@ def get_block_timestamp(foundry):
 
 
 def sync_registry_to_well_known(foundry, registry_addr, username):
+    """Sync deployed registry storage to well-known address so Go code can read it."""
     well_known = "0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e"
     user_namehash = f"$(cast namehash '{username}.stateofus.eth')"
     cmd = f"/app/sync_ens_registry.sh {registry_addr} {well_known} {ANVIL_RPC_URL} {user_namehash}"
@@ -106,7 +107,7 @@ def anvil_snapshot(foundry):
         cast_rpc(foundry, "evm_revert", [snapshot_id])
 
 
-def register_ens_name(foundry, ens_addresses, username, account_address, public_key, private_key=constants.DEPLOYER_ACCOUNT.private_key):
+def register_ens_name(foundry, ens_addresses, username, account_address, public_key):
     token = ens_addresses["token"]
     registrar = ens_addresses["registrar"]
 
@@ -122,21 +123,18 @@ def register_ens_name(foundry, ens_addresses, username, account_address, public_
     price_raw = cast_call(foundry, registrar, "getPrice()(uint256)")
     price = price_raw.strip().split()[0]
 
-    # Mint tokens to the registering account (only deployer/controller can mint)
     cast_send(
         foundry,
         token,
         "generateTokens(address,uint256)",
-        [account_address, price],
+        [constants.DEPLOYER_ACCOUNT.address, price],
     )
 
-    # Register with the caller's key
     cast_send(
         foundry,
         token,
         "approveAndCall(address,uint256,bytes)",
         [registrar, price, extra_data],
-        private_key=private_key,
     )
 
 
@@ -242,7 +240,6 @@ class TestEnsVisibility(AsyncMessengerSteps):
         sender.wakuext_service.send_contact_updates(full_name, "", "blue")
         logger.info(f"Sender propagated ENS name: {full_name}")
 
-        # Wait for the ENS name to appear on the contact
         contact = None
         for _ in range(30):
             contact = receiver.wakuext_service.get_contact_by_id(sender.public_key)
@@ -253,11 +250,6 @@ class TestEnsVisibility(AsyncMessengerSteps):
         assert contact is not None, "get_contact_by_id returned None"
         assert contact.get("name") == full_name, f"ENS name not visible: expected={full_name}, got={contact.get('name')}"
 
-        # Trigger ENS verification on the receiver.
-        # Note: automatic verification via the 30s verifier loop does not trigger here
-        # because HandleContactUpdate does not call ensVerifier.Add() and
-        # createChatIdentity hardcodes EnsName="" (protocol/messenger.go:1096 TODO).
-        # We use wakuext_ensVerified to create the record and mark it verified.
         receiver.wakuext_service.ens_verified(sender.public_key, full_name)
 
         contact = receiver.wakuext_service.get_contact_by_id(sender.public_key)
@@ -402,7 +394,6 @@ class TestEnsRegistration:
         sync_registry_to_well_known(self.foundry, self.ens_addresses["registry"], username)
         logger.info(f"Registered {full_name}")
 
-        # expire_at expects plain username, not full ENS name
         expire_hex = backend.ens_service.expire_at(CHAIN_ID, username)
         assert expire_hex, "ens_expireAt returned empty"
         expire_time = int(expire_hex, 16)
