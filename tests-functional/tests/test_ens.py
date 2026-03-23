@@ -1,4 +1,3 @@
-import asyncio
 import json
 import logging
 from contextlib import contextmanager
@@ -7,6 +6,7 @@ import uuid
 import pytest
 
 from clients.api import ApiResponseError
+from clients.signals import SignalType
 import resources.constants as constants
 from steps.async_messenger import AsyncMessengerSteps
 from utils import wallet_utils
@@ -138,6 +138,11 @@ def register_ens_name(foundry, ens_addresses, username, account_address, public_
     )
 
 
+def register_and_sync_ens_name(foundry, ens_addresses, username, account_address, public_key):
+    register_ens_name(foundry, ens_addresses, username, account_address, public_key)
+    sync_registry_to_well_known(foundry, ens_addresses["registry"], username)
+
+
 MAINNET_NETWORK = {
     "chainID": 1,
     "chainName": "Ethereum Mainnet",
@@ -170,7 +175,13 @@ MAINNET_NETWORK = {
 class TestEnsVisibility(AsyncMessengerSteps):
 
     @pytest.fixture
-    async def sender(self, async_backend_new_profile, foundry_client, ens_addresses, multicall3_deployer):
+    async def sender(
+        self,
+        async_backend_new_profile,
+        foundry_client,
+        ens_addresses,
+        multicall3_deployer,
+    ):
         backend = await async_backend_new_profile(
             "ens_sender",
             multicall_contract_address=multicall3_deployer.contract_address,
@@ -178,14 +189,13 @@ class TestEnsVisibility(AsyncMessengerSteps):
         username = f"ensvis{uuid.uuid4().hex[:8]}"
         full_name = f"{username}.stateofus.eth"
 
-        register_ens_name(
+        register_and_sync_ens_name(
             foundry_client,
             ens_addresses,
             username,
             constants.DEPLOYER_ACCOUNT.address,
             backend.public_key,
         )
-        sync_registry_to_well_known(foundry_client, ens_addresses["registry"], username)
         backend.backend.ens_service.add(CHAIN_ID, full_name)
         logger.info(f"Sender registered and linked {full_name}")
 
@@ -212,16 +222,15 @@ class TestEnsVisibility(AsyncMessengerSteps):
 
         await self.make_contacts(sender, receiver)
 
-        sender.wakuext_service.send_contact_updates(full_name, "", "blue")
-        logger.info(f"Sender propagated ENS name: {full_name}")
+        async with receiver.expect_signal(
+            SignalType.MESSAGES_NEW,
+            predicate=lambda s: any(c.get("name") == full_name for c in (s.event.get("contacts") or [])),
+            timeout=30,
+        ):
+            sender.wakuext_service.send_contact_updates(full_name, "", "blue")
+            logger.info(f"Sender propagated ENS name: {full_name}")
 
-        contact = None
-        for _ in range(30):
-            contact = receiver.wakuext_service.get_contact_by_id(sender.public_key)
-            if contact and contact.get("name") == full_name:
-                break
-            await asyncio.sleep(1)
-
+        contact = receiver.wakuext_service.get_contact_by_id(sender.public_key)
         assert contact is not None, "get_contact_by_id returned None"
         assert contact.get("name") == full_name, f"ENS name not visible to receiver: expected={full_name}, got={contact.get('name')}"
 
@@ -237,16 +246,15 @@ class TestEnsVisibility(AsyncMessengerSteps):
 
         await self.make_contacts(sender, receiver)
 
-        sender.wakuext_service.send_contact_updates(full_name, "", "blue")
-        logger.info(f"Sender propagated ENS name: {full_name}")
+        async with receiver.expect_signal(
+            SignalType.MESSAGES_NEW,
+            predicate=lambda s: any(c.get("name") == full_name for c in (s.event.get("contacts") or [])),
+            timeout=30,
+        ):
+            sender.wakuext_service.send_contact_updates(full_name, "", "blue")
+            logger.info(f"Sender propagated ENS name: {full_name}")
 
-        contact = None
-        for _ in range(30):
-            contact = receiver.wakuext_service.get_contact_by_id(sender.public_key)
-            if contact and contact.get("name") == full_name:
-                break
-            await asyncio.sleep(1)
-
+        contact = receiver.wakuext_service.get_contact_by_id(sender.public_key)
         assert contact is not None, "get_contact_by_id returned None"
         assert contact.get("name") == full_name, f"ENS name not visible: expected={full_name}, got={contact.get('name')}"
 
@@ -288,7 +296,7 @@ class TestEnsRegistration:
             registrar_addr == self.ens_addresses["registrar"]
         ), f"Registrar mismatch: RPC={registrar_addr}, deployed={self.ens_addresses['registrar']}"
 
-        register_ens_name(
+        register_and_sync_ens_name(
             self.foundry,
             self.ens_addresses,
             username,
@@ -296,8 +304,6 @@ class TestEnsRegistration:
             public_key,
         )
         logger.info(f"Registered {full_name} on-chain")
-
-        sync_registry_to_well_known(self.foundry, self.ens_addresses["registry"], username)
 
         owner = backend.ens_service.owner_of(CHAIN_ID, full_name)
         assert (
@@ -325,19 +331,18 @@ class TestEnsRegistration:
 
     def test_ens_link_and_manage_names(self, backend):
         public_key = backend.public_key
-        user1 = "linkuser1"
+        user1 = random_ens_username()
         user1_full = f"{user1}.stateofus.eth"
-        user2 = "linkuser2"
+        user2 = random_ens_username()
         user2_full = f"{user2}.stateofus.eth"
 
-        register_ens_name(
+        register_and_sync_ens_name(
             self.foundry,
             self.ens_addresses,
             user1,
             constants.DEPLOYER_ACCOUNT.address,
             public_key,
         )
-        sync_registry_to_well_known(self.foundry, self.ens_addresses["registry"], user1)
         backend.ens_service.add(CHAIN_ID, user1_full)
         logger.info(f"Linked {user1_full}")
 
@@ -348,14 +353,13 @@ class TestEnsRegistration:
         assert resolver_addr, "ens_resolver returned empty"
         logger.info(f"Resolver for {user1_full}: {resolver_addr}")
 
-        register_ens_name(
+        register_and_sync_ens_name(
             self.foundry,
             self.ens_addresses,
             user2,
             constants.DEPLOYER_ACCOUNT.address,
             public_key,
         )
-        sync_registry_to_well_known(self.foundry, self.ens_addresses["registry"], user2)
         backend.ens_service.add(CHAIN_ID, user2_full)
         logger.info(f"Linked {user2_full}")
 
@@ -380,18 +384,17 @@ class TestEnsRegistration:
 
     def test_ens_validity_time(self, backend):
         public_key = backend.public_key
-        username = "timeuser"
+        username = random_ens_username()
         full_name = f"{username}.stateofus.eth"
         one_year_seconds = 365 * 24 * 60 * 60
 
-        register_ens_name(
+        register_and_sync_ens_name(
             self.foundry,
             self.ens_addresses,
             username,
             constants.DEPLOYER_ACCOUNT.address,
             public_key,
         )
-        sync_registry_to_well_known(self.foundry, self.ens_addresses["registry"], username)
         logger.info(f"Registered {full_name}")
 
         expire_hex = backend.ens_service.expire_at(CHAIN_ID, username)
@@ -416,19 +419,18 @@ class TestEnsRegistration:
 
     def test_ens_release(self, backend):
         public_key = backend.public_key
-        username = "releaseuser"
+        username = random_ens_username()
         full_name = f"{username}.stateofus.eth"
         registrar = self.ens_addresses["registrar"]
         one_year_seconds = 365 * 24 * 60 * 60
 
-        register_ens_name(
+        register_and_sync_ens_name(
             self.foundry,
             self.ens_addresses,
             username,
             constants.DEPLOYER_ACCOUNT.address,
             public_key,
         )
-        sync_registry_to_well_known(self.foundry, self.ens_addresses["registry"], username)
         logger.info(f"Registered {full_name}")
 
         backend.ens_service.add(CHAIN_ID, full_name)
@@ -465,7 +467,13 @@ class TestEnsRegistration:
 class TestEnsRouterRegistration:
 
     @pytest.fixture()
-    def backend(self, backend_recovered_profile, foundry_client, ens_addresses, multicall3_deployer):
+    def backend(
+        self,
+        backend_recovered_profile,
+        foundry_client,
+        ens_addresses,
+        multicall3_deployer,
+    ):
         self.foundry = foundry_client
         self.ens_addresses = ens_addresses
         token_overrides = [
@@ -497,7 +505,12 @@ class TestEnsRouterRegistration:
         logger.info(f"ENS registration price: {amount_in}")
 
         token_address = self.ens_addresses["token"]
-        cast_send(self.foundry, token_address, "generateTokens(address,uint256)", [constants.user_1.address, int(price_hex, 16)])
+        cast_send(
+            self.foundry,
+            token_address,
+            "generateTokens(address,uint256)",
+            [constants.user_1.address, int(price_hex, 16)],
+        )
 
         token_key = wallet_utils.get_token_key(CHAIN_ID, token_address)
         tx_result = wallet_utils.send_router_transaction(
@@ -530,3 +543,67 @@ class TestEnsRouterRegistration:
         assert usernames, "ens_getEnsUsernames returned empty"
         found = any(u.get("username") == full_name for u in usernames)
         assert found, f"{full_name} not found in {usernames}"
+
+    def test_ens_release_via_router(self, backend):
+        """Release ENS name via wallet router after registration period expires."""
+        username = random_ens_username()
+        full_name = f"{username}.stateofus.eth"
+        one_year_seconds = 365 * 24 * 60 * 60
+
+        public_key = backend.public_key
+        assert public_key, "Backend public key not available"
+
+        price_hex = backend.ens_service.price(CHAIN_ID)
+        assert price_hex, "ens_price returned empty"
+        amount_in = f"0x{price_hex}"
+
+        token_address = self.ens_addresses["token"]
+        cast_send(
+            self.foundry,
+            token_address,
+            "generateTokens(address,uint256)",
+            [constants.user_1.address, int(price_hex, 16)],
+        )
+
+        token_key = wallet_utils.get_token_key(CHAIN_ID, token_address)
+        wallet_utils.send_router_transaction(
+            backend,
+            uuid=str(uuid.uuid4()),
+            sendType=1,  # ENSRegister
+            addrFrom=constants.user_1.address,
+            addrTo=constants.user_1.address,
+            amountIn=amount_in,
+            amountOut="0x0",
+            tokenKey=token_key,
+            tokenIDIsOwnerToken=False,
+            toTokenKey=token_key,
+            fromChainID=CHAIN_ID,
+            toChainID=CHAIN_ID,
+            gasFeeMode=1,
+            username=username,
+            publicKey=public_key,
+        )
+        logger.info(f"Registered {full_name} via router")
+
+        sync_registry_to_well_known(self.foundry, self.ens_addresses["registry"], username)
+
+        with anvil_snapshot(self.foundry):
+            cast_rpc(self.foundry, "evm_increaseTime", [one_year_seconds + 1])
+            cast_rpc(self.foundry, "evm_mine")
+            logger.info("Advanced time past 365 days")
+
+            label = cast_keccak(self.foundry, username)
+            registrar = self.ens_addresses["registrar"]
+            cast_send(
+                self.foundry,
+                registrar,
+                "release(bytes32)",
+                [label],
+                private_key=constants.user_1.private_key,
+            )
+            logger.info(f"Released {full_name}")
+
+            sync_registry_to_well_known(self.foundry, self.ens_addresses["registry"], username)
+
+            owner = backend.ens_service.owner_of(CHAIN_ID, full_name)
+            assert owner == "0x0000000000000000000000000000000000000000", f"Owner should be zero after release: {owner}"
