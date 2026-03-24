@@ -8,7 +8,7 @@ import pytest
 from clients.api import ApiResponseError
 from clients.signals import SignalType
 import resources.constants as constants
-from steps.async_messenger import AsyncMessengerSteps
+from steps import async_messenger
 from utils import wallet_utils
 from utils.config import Config
 
@@ -172,7 +172,7 @@ MAINNET_NETWORK = {
 @pytest.mark.rpc
 @pytest.mark.ens
 @pytest.mark.asyncio
-class TestEnsVisibility(AsyncMessengerSteps):
+class TestEnsVisibility:
 
     @pytest.fixture
     async def sender(
@@ -220,7 +220,7 @@ class TestEnsVisibility(AsyncMessengerSteps):
         """
         full_name = sender._ens_full_name
 
-        await self.make_contacts(sender, receiver)
+        await async_messenger.make_contacts(sender, receiver)
 
         async with receiver.expect_signal(
             SignalType.MESSAGES_NEW,
@@ -244,7 +244,7 @@ class TestEnsVisibility(AsyncMessengerSteps):
         """
         full_name = sender._ens_full_name
 
-        await self.make_contacts(sender, receiver)
+        await async_messenger.make_contacts(sender, receiver)
 
         async with receiver.expect_signal(
             SignalType.MESSAGES_NEW,
