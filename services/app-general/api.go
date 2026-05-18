@@ -3,6 +3,7 @@ package appgeneral
 import (
 	"context"
 
+	accscommon "github.com/status-im/status-go/internal/accounts-management/common"
 	"github.com/status-im/status-go/pkg/version"
 )
 
@@ -21,4 +22,9 @@ func (api *API) GetCurrencies(context context.Context) []*Currency {
 
 func (api *API) Version(context context.Context) string {
 	return version.Version()
+}
+
+// GetRandomMnemonic creates a random BIP-39 mnemonic with the default length.
+func (api *API) GetRandomMnemonic(context context.Context) (string, error) {
+	return accscommon.CreateRandomMnemonicWithDefaultLength()
 }
